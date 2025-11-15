@@ -17,3 +17,4 @@ urllib3==1.26.13
 Werkzeug==2.2.2
 zipp==3.11.0
 pytest==8.3.3
+ecdsa==0.19.0
