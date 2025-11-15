@@ -16,15 +16,21 @@ block_chain = SlowChain()
 def new_transaction():
     data = request.get_json()
 
-    required_fields = {'sender', 'recipient', 'amount'}
+    required_fields = {'sender', 'recipient', 'amount', 'public_key', 'signature'}
     if not data or not required_fields.issubset(data):
-        return jsonify({'error': 'Missing fields. Required: sender, recipient, amount'}), 400
+        return jsonify({'error': 'Missing fields. Required: sender, recipient, amount, public_key, signature'}), 400
 
-    this_block_index = block_chain.add_transaction(
-        sender=data['sender'],
-        receiver=data['recipient'],
-        amount=data['amount'],
-    )
+    try:
+        this_block_index = block_chain.add_transaction(
+            sender=data['sender'],
+            receiver=data['recipient'],
+            amount=data['amount'],
+            public_key=data['public_key'],
+            signature=data['signature'],
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
     response = {
         'message': f'Transaction will be added to block {this_block_index}',
         'pending_transactions': block_chain.transactions,
@@ -71,11 +77,11 @@ def mine():
     previous_pow = previous_block['proof_of_work']
     proof = block_chain.proof_of_work(previous_pow)
 
-    # Reward for mining a new block
     block_chain.add_transaction(
         sender="0",
         receiver=node_id,
-        amount=block_chain.MINING_REWARD
+        amount=block_chain.MINING_REWARD,
+        is_reward=True,
     )
 
     previous_hash = block_chain.to_hash(previous_block)
@@ -93,7 +99,6 @@ def mine():
     }
 
     return jsonify(response), 200
-
 
 @app.route('/nodes/register', methods=['POST'])
 def register_node():
