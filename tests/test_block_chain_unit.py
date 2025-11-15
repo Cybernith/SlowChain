@@ -1,5 +1,23 @@
 import copy
+import ecdsa
+
 from block_chain import SlowChain
+
+
+def make_keypair_and_address():
+    sk = ecdsa.SigningKey.generate(curve=ecdsa.SECP256k1)
+    vk = sk.get_verifying_key()
+    public_hex = vk.to_string().hex()
+
+    tmp_chain = SlowChain()
+    address = tmp_chain.address_from_public_key(public_hex)
+    return sk, public_hex, address
+
+
+def sign_tx(sk, sender_addr, receiver_addr, amount):
+    msg = SlowChain.tx_message(sender_addr, receiver_addr, amount)
+    sig = sk.sign(msg.encode())
+    return sig.hex()
 
 
 def test_genesis_block_created():
@@ -14,22 +32,31 @@ def test_genesis_block_created():
     assert genesis["transactions"] == []
 
 
-def test_add_transaction_and_pending_list():
+def test_add_signed_transaction_and_pending_list():
     chain = SlowChain()
 
+    sk, public_hex, address = make_keypair_and_address()
+    receiver = "receiver-address-001"
+    amount = 10
+
+    sig_hex = sign_tx(sk, address, receiver, amount)
+
     index = chain.add_transaction(
-        sender="alice",
-        receiver="bob",
-        amount=10,
+        sender=address,
+        receiver=receiver,
+        amount=amount,
+        public_key=public_hex,
+        signature=sig_hex,
     )
 
-    # باید در بلاک بعدی قرار بگیره
     assert index == chain.previous_block["pk"] + 1
     assert len(chain.transactions) == 1
     tx = chain.transactions[0]
-    assert tx["from"] == "alice"
-    assert tx["to"] == "bob"
-    assert tx["amount"] == 10
+    assert tx["from"] == address
+    assert tx["to"] == receiver
+    assert tx["amount"] == amount
+    assert tx["public_key"] == public_hex
+    assert tx["signature"] == sig_hex
 
 
 def test_proof_of_work_valid():
@@ -41,10 +68,21 @@ def test_proof_of_work_valid():
     assert chain.validate_pow(prev_pow, proof)
 
 
-def test_validate_chain_detects_tamper():
+def test_validate_chain_detects_tamper_in_signed_tx():
     chain = SlowChain()
 
-    chain.add_transaction(sender="alice", receiver="bob", amount=5)
+    sk, public_hex, address = make_keypair_and_address()
+    receiver = "receiver"
+    amount = 5
+    sig_hex = sign_tx(sk, address, receiver, amount)
+
+    chain.add_transaction(
+        sender=address,
+        receiver=receiver,
+        amount=amount,
+        public_key=public_hex,
+        signature=sig_hex,
+    )
 
     prev_block = chain.previous_block
     prev_pow = prev_block["proof_of_work"]
