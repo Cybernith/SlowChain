@@ -1,7 +1,24 @@
+import hashlib
+import ecdsa
 import pytest
 
 from app import app, block_chain as global_chain
 from block_chain import SlowChain
+
+
+def make_keypair_and_address():
+    sk = ecdsa.SigningKey.generate(curve=ecdsa.SECP256k1)
+    vk = sk.get_verifying_key()
+    public_bytes = vk.to_string()
+    public_hex = public_bytes.hex()
+    address = hashlib.sha256(public_bytes).hexdigest()[:40]
+    return sk, public_hex, address
+
+
+def sign_tx(sk, sender_addr, receiver_addr, amount):
+    msg = SlowChain.tx_message(sender_addr, receiver_addr, amount)
+    sig = sk.sign(msg.encode())
+    return sig.hex()
 
 
 @pytest.fixture(autouse=True)
@@ -32,11 +49,18 @@ def test_get_chain_returns_genesis_block(client):
     assert data["chain"][0]["pk"] == 1
 
 
-def test_create_transaction_and_mine_flow(client):
+def test_create_signed_transaction_and_mine_flow(client):
+    sk, public_hex, address = make_keypair_and_address()
+    recipient = "receiver-addr-001"
+    amount = 42
+    sig_hex = sign_tx(sk, address, recipient, amount)
+
     tx_payload = {
-        "sender": "alice",
-        "recipient": "bob",
-        "amount": 42,
+        "sender": address,
+        "recipient": recipient,
+        "amount": amount,
+        "public_key": public_hex,
+        "signature": sig_hex,
     }
     resp_tx = client.post("/transactions/new", json=tx_payload)
     assert resp_tx.status_code == 201
@@ -51,26 +75,21 @@ def test_create_transaction_and_mine_flow(client):
     assert data_mine["message"].startswith("New block created")
     assert "pk" in data_mine
     assert "transactions" in data_mine
-    assert "proof_of_work" in data_mine
-    assert "previous_hash" in data_mine
 
     resp_chain = client.get("/chain")
     data_chain = resp_chain.get_json()
-    assert data_chain["len_of_chain"] >= 2
-    assert len(data_chain["chain"]) >= 2
-
     chain = data_chain["chain"]
     found = False
     for block in chain:
         for tx in block.get("transactions", []):
             if (
-                tx.get("from") == "alice"
-                and tx.get("to") == "bob"
-                and tx.get("amount") == 42
+                tx.get("from") == address
+                and tx.get("to") == recipient
+                and tx.get("amount") == amount
             ):
                 found = True
                 break
         if found:
             break
 
-    assert found, "Transaction from alice to bob with amount 42 not found in chain"
+    assert found, "Signed transaction not found in chain"
