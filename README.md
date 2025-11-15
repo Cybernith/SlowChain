@@ -3,6 +3,24 @@ https://sorooshmorshedi.ir
 
 A tiny educational blockchain implementation built with **Python** and **Flask**.
 
+SlowChain is a simplified yet accurate representation of the core mechanics behind modern cryptocurrencies.
+It recreates the foundational building blocks of a decentralized digital currency using Python, Flask, ECDSA signatures, and a compact Proof-of-Work system.
+
+In SlowChain:
+
+Each user owns a private/public keypair, and wallet addresses are derived from hashing the public key.
+
+Every transaction is digitally signed (ECDSA) to ensure only the rightful owner of the wallet can authorize transfers.
+
+Miners validate transactions and create new blocks through a Proof-of-Work algorithm, receiving a mining reward for securing the network.
+
+Nodes participate in a consensus process (Longest Valid Chain Rule) to maintain a consistent, tamper-resistant ledger across the network.
+
+No central authority exists; security and trust come purely from cryptography, distributed agreement, and immutable block structure.
+
+SlowChain is not intended to function as a real cryptocurrency, but it provides a transparent, testable, and extensible micro-model of how digital currencies like Bitcoin operate under the hood.
+
+
 This project is a minimal demo of:
 
 - Basic blockchain data structure
