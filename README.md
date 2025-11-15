@@ -10,16 +10,17 @@ This project is a minimal demo of:
 - Transaction handling
 - Node registration
 - Naive consensus (longest valid chain wins)
-- Unit tests and end-to-end tests with **pytest**
+- ✅ Digital signatures for transactions (ECDSA)
+- 🧪 Unit tests and end-to-end tests with **pytest**
 
 ---
 
 ## Features
 
 - ⛏️ Mine new blocks with a simple PoW algorithm  
-- 💸 Create transactions between addresses  
+- 💸 Create **signed** transactions between addresses  
 - 🌐 Register multiple nodes and reach consensus  
-- ✅ Validate the integrity of the chain via API  
+- ✅ Validate the integrity of the chain **and signatures** via code  
 - 🔍 Inspect pending transactions, nodes, and the full chain  
 - 🧪 Run unit tests for core blockchain logic and E2E tests for the HTTP API
 
@@ -99,18 +100,30 @@ Checks if the current chain is valid.
 
 ---
 
-### 4. Create Transaction
+### 4. Create Signed Transaction
 
 **POST /transactions/new**
+
+Transactions must be **digitally signed** (except mining reward transactions which are created internally by the node).
 
 **Body:**
 
 ```json
 {
-  "sender": "address_1",
-  "recipient": "address_2",
-  "amount": 10
+  "sender": "sender_address",
+  "recipient": "receiver_address",
+  "amount": 10,
+  "public_key": "hex-encoded-public-key",
+  "signature": "hex-encoded-signature"
 }
+```
+
+- `sender` is an **address** derived from the public key.
+- `public_key` is the raw ECDSA public key (secp256k1) encoded as hex.
+- `signature` is the hex-encoded ECDSA signature of the message:
+
+```text
+"{sender}:{recipient}:{amount}"
 ```
 
 **Response:**
@@ -121,6 +134,8 @@ Checks if the current chain is valid.
   "pending_transactions": [...]
 }
 ```
+
+If signature or public key is invalid, the API returns `400` with an error message.
 
 ---
 
@@ -139,6 +154,8 @@ Shows all transactions waiting to be mined into a block.
 - Runs the proof-of-work algorithm.
 - Rewards the miner with `SlowChain.MINING_REWARD` coins from `"0"` (system).
 - Creates and appends a new block to the chain.
+
+Reward transactions are **system-generated** and do not require a signature.
 
 **Response example:**
 
@@ -222,6 +239,80 @@ Returns all known nodes.
 
 ---
 
+## Digital Signatures & Security
+
+SlowChain uses **ECDSA (secp256k1)** to secure transactions.
+
+### Address model
+
+- A key pair is generated using ECDSA.
+- The **public key** (raw bytes) is encoded as hex and sent in each transaction.
+- The **address** is derived from the public key:
+
+```text
+address = sha256(public_key_bytes).hexdigest()[:40]
+```
+
+- `sender` must equal this derived address.
+- Each transaction includes:
+  - `from` (address)
+  - `to` (address)
+  - `amount`
+  - `public_key` (hex)
+  - `signature` (hex)
+
+During validation:
+
+1. The address derived from `public_key` must match `from`.
+2. The ECDSA `signature` must match the message:
+
+```text
+"{from}:{to}:{amount}"
+```
+
+3. If any of these checks fail in any block, the whole chain is considered **invalid**.
+
+Mining reward transactions with `from = "0"` are trusted by definition and skip signature validation.
+
+---
+
+### Example: signing a transaction in Python
+
+```python
+import ecdsa
+import hashlib
+import requests
+
+SENDER_PRIVATE_KEY = ecdsa.SigningKey.generate(curve=ecdsa.SECP256k1)
+SENDER_PUBLIC_KEY = SENDER_PRIVATE_KEY.get_verifying_key()
+
+public_key_bytes = SENDER_PUBLIC_KEY.to_string()
+public_key_hex = public_key_bytes.hex()
+
+# Derive the address from the public key
+address = hashlib.sha256(public_key_bytes).hexdigest()[:40]
+
+recipient = "some-recipient-address"
+amount = 10
+
+message = f"{address}:{recipient}:{amount}"
+signature_bytes = SENDER_PRIVATE_KEY.sign(message.encode())
+signature_hex = signature_bytes.hex()
+
+payload = {
+    "sender": address,
+    "recipient": recipient,
+    "amount": amount,
+    "public_key": public_key_hex,
+    "signature": signature_hex,
+}
+
+resp = requests.post("http://127.0.0.1:5000/transactions/new", json=payload)
+print(resp.status_code, resp.json())
+```
+
+---
+
 ## Testing
 
 This project uses **pytest** for both unit tests and end-to-end (E2E) tests.
@@ -248,9 +339,9 @@ pytest
 - `tests/test_block_chain_unit.py`
   - Tests core `SlowChain` logic:
     - Genesis block creation
-    - Transactions
+    - Signed transactions
     - Proof-of-work
-    - Chain validation (valid vs tampered chain)
+    - Chain validation (valid vs tampered chain, including signature checking)
 - `tests/test_app_e2e.py`
   - Uses Flask's test client to hit real HTTP endpoints:
     - `/chain`
