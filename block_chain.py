@@ -4,6 +4,7 @@ from time import time
 from urllib.parse import urlparse
 
 import requests
+import ecdsa
 
 
 class SlowChain:
@@ -22,9 +23,6 @@ class SlowChain:
         return self.chain[-1]
 
     def create_block(self, proof, previous_hash=None):
-        """
-        Create a new block (but do NOT add it to the chain yet).
-        """
         block = {
             'pk': len(self.chain) + 1,
             'date_time': time(),
@@ -35,51 +33,88 @@ class SlowChain:
         return block
 
     def add_block_to_chain(self, block):
-        """
-        Add a block to the chain and reset the current list of transactions.
-        """
         self.transactions = []
         self.chain.append(block)
 
-    def add_transaction(self, sender, receiver, amount):
-        """
-        Add a new transaction to the list of pending transactions.
 
-        Returns the index of the block that will hold this transaction.
+    @staticmethod
+    def tx_message(sender, receiver, amount):
+        """Canonical transaction message to be signed."""
+        return f"{sender}:{receiver}:{amount}"
+
+    @staticmethod
+    def address_from_public_key(public_key_hex: str) -> str:
+        public_bytes = bytes.fromhex(public_key_hex)
+        return hashlib.sha256(public_bytes).hexdigest()[:40]
+
+    @staticmethod
+    def verify_signature(public_key_hex: str, signature_hex: str, message: str) -> bool:
         """
+        Verify an ECDSA signature (secp256k1) for the given message.
+        """
+        try:
+            vk = ecdsa.VerifyingKey.from_string(
+                bytes.fromhex(public_key_hex),
+                curve=ecdsa.SECP256k1
+            )
+            vk.verify(bytes.fromhex(signature_hex), message.encode())
+            return True
+        except Exception:
+            return False
+
+
+    def add_transaction(
+        self,
+        sender,
+        receiver,
+        amount,
+        public_key=None,
+        signature=None,
+        is_reward=False,
+    ):
+        if is_reward:
+            if sender != "0":
+                raise ValueError("Reward transaction must have sender = '0'")
+        else:
+            if sender == "0":
+                raise ValueError("Normal transaction cannot have sender = '0'")
+
+            if not public_key or not signature:
+                raise ValueError("public_key and signature are required for non-reward transactions")
+
+            derived_address = self.address_from_public_key(public_key)
+            if derived_address != sender:
+                raise ValueError("Sender does not match public key")
+
+            msg = self.tx_message(sender, receiver, amount)
+            if not self.verify_signature(public_key, signature, msg):
+                raise ValueError("Invalid signature for transaction")
+
         self.transactions.append({
             'from': sender,
             'to': receiver,
             'amount': amount,
+            'public_key': public_key,
+            'signature': signature,
+            'is_reward': is_reward,
         })
 
         return self.previous_block['pk'] + 1
 
+
     def validate_pow(self, first_pow, second_pow, difficulty=4):
-        """
-        Validate a proof-of-work solution.
-        Difficulty is the number of leading zeros required.
-        """
         proof = f"{first_pow}{second_pow}".encode()
         hash_of_pow = self.sha256(proof)
         return hash_of_pow[:difficulty] == "0" * difficulty
 
     def proof_of_work(self, previous_pow, difficulty=4):
-        """
-        Very simple proof-of-work algorithm:
-        - Find a number 'proof' such that hash(previous_pow, proof)
-          has 'difficulty' leading zeros.
-        """
         proof = 0
-        # Keep searching while NOT valid
         while not self.validate_pow(previous_pow, proof, difficulty=difficulty):
             proof += 1
         return proof
 
+
     def to_hash(self, value):
-        """
-        Generate a SHA-256 hash of a Python object using JSON serialization.
-        """
         input_str = json.dumps(value, sort_keys=True).encode()
         return self.sha256(input_str)
 
@@ -87,20 +122,14 @@ class SlowChain:
     def sha256(sha_input):
         return hashlib.sha256(sha_input).hexdigest()
 
-    def register_node(self, address):
-        """
-        Add a new node to the list of nodes.
 
-        Expected address formats:
-        - "http://127.0.0.1:5000"
-        - "https://example.com"
-        - "127.0.0.1:5000"
-        """
+    def register_node(self, address):
         parsed_url = urlparse(address)
         if parsed_url.netloc:
             self.nodes.add(parsed_url.netloc)
         elif parsed_url.path:
             self.nodes.add(parsed_url.path)
+
 
     def validate_chain(self, chain):
         if not chain:
@@ -118,16 +147,34 @@ class SlowChain:
             if not self.validate_pow(previous_block['proof_of_work'], block['proof_of_work']):
                 return False
 
+            for tx in block.get('transactions', []):
+                sender = tx.get('from')
+                receiver = tx.get('to')
+                amount = tx.get('amount')
+                public_key = tx.get('public_key')
+                signature = tx.get('signature')
+                is_reward = tx.get('is_reward', False)
+
+                if is_reward or sender == "0":
+                    continue
+
+                if not public_key or not signature:
+                    return False
+
+                derived = self.address_from_public_key(public_key)
+                if derived != sender:
+                    return False
+
+                msg = self.tx_message(sender, receiver, amount)
+                if not self.verify_signature(public_key, signature, msg):
+                    return False
+
             previous_block = block
             current_index += 1
 
         return True
 
     def resolve_conflicts(self):
-        """
-        Consensus algorithm: replace our chain with the longest valid one
-        in the network of registered nodes.
-        """
         others = self.nodes
         new_chain = None
         max_length = len(self.chain)
